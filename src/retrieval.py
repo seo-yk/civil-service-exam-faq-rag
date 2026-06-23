@@ -6,11 +6,11 @@ from typing import Protocol, Sequence
 import faiss
 import numpy as np
 
-from src.indexing import FaqDocument
+from src.indexing import EmbeddingRole, FaqDocument
 
 
 class Embedder(Protocol):
-    def embed(self, texts: Sequence[str]) -> np.ndarray: ...
+    def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +42,7 @@ class FaissRetriever:
         if not self._documents:
             return []
 
-        query_vector = np.asarray(self._embedder.embed([question]), dtype=np.float32).copy()
+        query_vector = np.asarray(self._embedder.embed([question], role="query"), dtype=np.float32).copy()
         faiss.normalize_L2(query_vector)
         scores, positions = self._index.search(query_vector, min(top_k, len(self._documents)))
         return [

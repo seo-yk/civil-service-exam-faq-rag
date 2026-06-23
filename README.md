@@ -38,7 +38,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env`에 `OPENAI_API_KEY`와 `GEMINI_API_KEY`를 설정합니다.
+`.env`에 `OPENAI_API_KEY`, `GEMINI_API_KEY`, `FAQ_EMBEDDING_PROVIDER`, `FAQ_EMBEDDING_MODE`, `FAQ_TOP_K`를 설정합니다.
+`FAQ_EMBEDDING_PROVIDER`는 `openai` 또는 `local`을 사용할 수 있고, 로컬 비교용 기본 모델은 `LOCAL_EMBEDDING_MODEL=intfloat/multilingual-e5-small`입니다.
 
 ## 데이터 준비
 
@@ -55,17 +56,32 @@ python src/indexing.py --csv data/faq.csv --output index
 ```text
 index/
 ├── row/
-│   ├── title.faiss
-│   ├── title_body.faiss
-│   └── metadata.json
+│   ├── openai/
+│   │   ├── title.faiss
+│   │   ├── title_body.faiss
+│   │   └── metadata.json
+│   └── local/
+│       ├── title.faiss
+│       ├── title_body.faiss
+│       └── metadata.json
 ├── paragraph/
-│   ├── title.faiss
-│   ├── title_body.faiss
-│   └── metadata.json
+│   ├── openai/
+│   │   ├── title.faiss
+│   │   ├── title_body.faiss
+│   │   └── metadata.json
+│   └── local/
+│       ├── title.faiss
+│       ├── title_body.faiss
+│       └── metadata.json
 └── file/
-    ├── title.faiss
-    ├── title_body.faiss
-    └── metadata.json
+    ├── openai/
+    │   ├── title.faiss
+    │   ├── title_body.faiss
+    │   └── metadata.json
+    └── local/
+        ├── title.faiss
+        ├── title_body.faiss
+        └── metadata.json
 ```
 
 ## 실행

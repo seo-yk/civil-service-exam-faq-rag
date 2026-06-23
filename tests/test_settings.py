@@ -11,9 +11,10 @@ def test_settings_reads_required_keys_and_defaults() -> None:
         }
     )
 
+    assert settings.embedding_provider == "openai"
     assert settings.embedding_model == "text-embedding-3-small"
     assert settings.gemini_model == "gemini-3.5-flash"
-    assert str(settings.index_path) == "index/title_body.faiss"
+    assert str(settings.index_path) == "index/row/openai/title_body.faiss"
 
 
 def test_settings_rejects_missing_api_keys() -> None:

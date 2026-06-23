@@ -10,7 +10,7 @@ from google import genai
 from openai import OpenAI
 
 from src.generation import GeminiAnswerGenerator
-from src.indexing import OpenAIEmbedder, index_bundle_paths, load_documents
+from src.indexing import build_embedder, index_bundle_paths, load_documents
 from src.retrieval import FaissRetriever
 
 
@@ -20,6 +20,7 @@ class Settings:
 
     openai_api_key: str
     gemini_api_key: str
+    embedding_provider: str
     embedding_model: str
     gemini_model: str
     chunking_mode: str
@@ -37,18 +38,23 @@ class Settings:
         if not gemini_api_key:
             raise ValueError("GEMINI_API_KEY 환경변수가 필요합니다.")
 
+        embedding_provider = values.get("FAQ_EMBEDDING_PROVIDER", "openai")
         chunking_mode = values.get("FAQ_CHUNKING_MODE", "row")
         embedding_mode = values.get("FAQ_EMBEDDING_MODE", "title_body")
         top_k = int(values.get("FAQ_TOP_K", "3"))
         index_path, metadata_path = index_bundle_paths(
             values.get("FAQ_INDEX_DIR", "index"),
             chunking_mode,  # type: ignore[arg-type]
+            embedding_provider,  # type: ignore[arg-type]
             embedding_mode,  # type: ignore[arg-type]
         )
         return cls(
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
-            embedding_model=values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+            embedding_provider=embedding_provider,
+            embedding_model=values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            if embedding_provider == "openai"
+            else values.get("LOCAL_EMBEDDING_MODEL", "intfloat/multilingual-e5-small"),
             gemini_model=values.get("GEMINI_MODEL", "gemini-3.5-flash"),
             chunking_mode=chunking_mode,
             embedding_mode=embedding_mode,
@@ -60,13 +66,18 @@ class Settings:
 
 @st.cache_resource
 def build_services(settings: Settings) -> tuple[FaissRetriever, GeminiAnswerGenerator]:
+    embedder = build_embedder(
+        settings.embedding_provider,
+        {
+            "OPENAI_API_KEY": settings.openai_api_key,
+            "OPENAI_EMBEDDING_MODEL": settings.embedding_model,
+            "LOCAL_EMBEDDING_MODEL": settings.embedding_model,
+        },
+    )
     retriever = FaissRetriever(
         index=faiss.read_index(str(settings.index_path)),
         documents=load_documents(settings.metadata_path),
-        embedder=OpenAIEmbedder(
-            OpenAI(api_key=settings.openai_api_key),
-            settings.embedding_model,
-        ),
+        embedder=embedder,
     )
     generator = GeminiAnswerGenerator(
         client=genai.Client(api_key=settings.gemini_api_key),
@@ -89,7 +100,7 @@ def main() -> None:
         st.stop()
 
     st.sidebar.caption(
-        f"chunking={settings.chunking_mode}, embedding={settings.embedding_mode}, top_k={settings.top_k}"
+        f"provider={settings.embedding_provider}, chunking={settings.chunking_mode}, embedding={settings.embedding_mode}, top_k={settings.top_k}"
     )
 
     question = st.text_input("질문을 입력하세요")

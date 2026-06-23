@@ -16,9 +16,12 @@ from openai import OpenAI
 
 
 EmbeddingMode = Literal["title", "title_body"]
+EmbeddingProvider = Literal["openai", "local"]
+EmbeddingRole = Literal["query", "passage"]
 ChunkingMode = Literal["row", "paragraph", "file"]
 REQUIRED_COLUMNS = {"연번", "제목", "본문"}
 ENCODINGS = ("utf-8-sig", "utf-8", "cp949")
+LOCAL_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +52,12 @@ class EmbeddingClient(Protocol):
     embeddings: Any
 
 
+class LocalEmbeddingModel(Protocol):
+    def encode(self, sentences: Sequence[str], **kwargs: Any) -> Any: ...
+
+
 class Embedder(Protocol):
-    def embed(self, texts: Sequence[str]) -> np.ndarray: ...
+    def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray: ...
 
 
 class OpenAIEmbedder:
@@ -60,7 +67,8 @@ class OpenAIEmbedder:
         self._client = client
         self.model = model
 
-    def embed(self, texts: Sequence[str]) -> np.ndarray:
+    def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray:
+        del role
         if not texts:
             raise ValueError("임베딩할 텍스트 목록이 비어 있습니다.")
 
@@ -71,6 +79,41 @@ class OpenAIEmbedder:
         )
         ordered = sorted(response.data, key=lambda item: item.index)
         return np.asarray([item.embedding for item in ordered], dtype=np.float32)
+
+
+class LocalEmbedder:
+    """로컬 sentence-transformers 모델을 사용해 텍스트를 임베딩한다."""
+
+    def __init__(self, model_name: str = LOCAL_EMBEDDING_MODEL, model: LocalEmbeddingModel | None = None) -> None:
+        self.model_name = model_name
+        self._model = model
+
+    def _load_model(self) -> LocalEmbeddingModel:
+        if self._model is not None:
+            return self._model
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as error:  # pragma: no cover - exercised only when dependency missing
+            raise RuntimeError(
+                "local embeddings require the 'sentence-transformers' package"
+            ) from error
+        self._model = SentenceTransformer(self.model_name)
+        return self._model
+
+    def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray:
+        if not texts:
+            raise ValueError("임베딩할 텍스트 목록이 비어 있습니다.")
+
+        prefix = "query: " if role == "query" else "passage: "
+        payload = [f"{prefix}{text}" for text in texts]
+        model = self._load_model()
+        vectors = model.encode(
+            payload,
+            convert_to_numpy=True,
+            normalize_embeddings=False,
+            show_progress_bar=False,
+        )
+        return np.asarray(vectors, dtype=np.float32)
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -208,8 +251,13 @@ def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
     return index
 
 
-def index_bundle_paths(output_dir: str | Path, chunking_mode: ChunkingMode, embedding_mode: EmbeddingMode) -> tuple[Path, Path]:
-    mode_dir = Path(output_dir) / chunking_mode
+def index_bundle_paths(
+    output_dir: str | Path,
+    chunking_mode: ChunkingMode,
+    embedding_provider: EmbeddingProvider,
+    embedding_mode: EmbeddingMode,
+) -> tuple[Path, Path]:
+    mode_dir = Path(output_dir) / chunking_mode / embedding_provider
     return mode_dir / f"{embedding_mode}.faiss", mode_dir / "metadata.json"
 
 
@@ -254,7 +302,7 @@ def load_documents(path: str | Path) -> list[FaqDocument]:
 def build_indexes(
     csv_path: Path,
     output_dir: Path,
-    embedder: Embedder,
+    embedders: dict[EmbeddingProvider, Embedder],
     chunking_modes: Sequence[ChunkingMode] = ("row", "paragraph", "file"),
     embedding_modes: Sequence[EmbeddingMode] = ("title", "title_body"),
 ) -> None:
@@ -265,33 +313,48 @@ def build_indexes(
 
     for chunking_mode in chunking_modes:
         chunked_documents = build_chunked_documents(source_documents, chunking_mode)
-        mode_dir = output_dir / chunking_mode
-        mode_dir.mkdir(parents=True, exist_ok=True)
-        metadata_path = mode_dir / "metadata.json"
+        for embedding_provider, embedder in embedders.items():
+            mode_dir = output_dir / chunking_mode / embedding_provider
+            mode_dir.mkdir(parents=True, exist_ok=True)
+            metadata_path = mode_dir / "metadata.json"
 
-        for embedding_mode in embedding_modes:
-            vectors = embedder.embed([document.embedding_text(embedding_mode) for document in chunked_documents])
-            index_path = mode_dir / f"{embedding_mode}.faiss"
-            save_index_bundle(build_faiss_index(vectors), chunked_documents, index_path, metadata_path)
+            for embedding_mode in embedding_modes:
+                vectors = embedder.embed(
+                    [document.embedding_text(embedding_mode) for document in chunked_documents],
+                    role="passage",
+                )
+                index_path = mode_dir / f"{embedding_mode}.faiss"
+                save_index_bundle(build_faiss_index(vectors), chunked_documents, index_path, metadata_path)
+
+
+def build_embedder(provider: EmbeddingProvider, values: Mapping[str, str]) -> Embedder:
+    if provider == "openai":
+        api_key = values.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY 환경변수가 필요합니다.")
+        model = values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+        return OpenAIEmbedder(OpenAI(api_key=api_key), model)
+    if provider == "local":
+        model_name = values.get("LOCAL_EMBEDDING_MODEL", LOCAL_EMBEDDING_MODEL)
+        return LocalEmbedder(model_name=model_name)
+    raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FAQ CSV에서 FAISS 인덱스를 생성합니다.")
     parser.add_argument("--csv", type=Path, default=Path("data/faq.csv"))
     parser.add_argument("--output", type=Path, default=Path("index"))
+    parser.add_argument("--providers", nargs="+", default=["openai", "local"])
     parser.add_argument("--chunking-modes", nargs="+", default=["row", "paragraph", "file"])
     parser.add_argument("--embedding-modes", nargs="+", default=["title", "title_body"])
     args = parser.parse_args()
 
     load_dotenv()
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY 환경변수가 필요합니다.")
-    model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    embedders = {provider: build_embedder(provider, os.environ) for provider in args.providers}
     build_indexes(
         args.csv,
         args.output,
-        OpenAIEmbedder(OpenAI(api_key=api_key), model),
+        embedders,
         tuple(args.chunking_modes),
         tuple(args.embedding_modes),
     )

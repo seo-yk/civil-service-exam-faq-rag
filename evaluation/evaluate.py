@@ -9,9 +9,14 @@ from typing import Sequence
 
 import faiss
 from dotenv import load_dotenv
-from openai import OpenAI
-
-from src.indexing import ChunkingMode, EmbeddingMode, OpenAIEmbedder, index_bundle_paths, load_documents
+from src.indexing import (
+    ChunkingMode,
+    EmbeddingMode,
+    EmbeddingProvider,
+    build_embedder,
+    index_bundle_paths,
+    load_documents,
+)
 from src.retrieval import FaissRetriever
 
 
@@ -59,7 +64,7 @@ def evaluate_index(
     index_path: Path,
     metadata_path: Path,
     questions: list[tuple[str, int]],
-    embedder: OpenAIEmbedder,
+    embedder,
     top_k: int,
 ) -> EvaluationResult:
     retriever = FaissRetriever(
@@ -80,29 +85,31 @@ def evaluate_index(
 def _experiment_rows(
     index_dir: Path,
     questions: list[tuple[str, int]],
-    embedder: OpenAIEmbedder,
+    embedders: dict[EmbeddingProvider, object],
     chunking_modes: Sequence[ChunkingMode],
     embedding_modes: Sequence[EmbeddingMode],
     top_ks: Sequence[int],
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for chunking_mode in chunking_modes:
-        for embedding_mode in embedding_modes:
-            index_path, metadata_path = index_bundle_paths(index_dir, chunking_mode, embedding_mode)
-            for top_k in top_ks:
-                result = evaluate_index(index_path, metadata_path, questions, embedder, top_k)
-                rows.append(
-                    {
-                        "chunking_mode": chunking_mode,
-                        "embedding_mode": embedding_mode,
-                        "top_k": top_k,
-                        "hit_at_1": result.hit_at_1,
-                        "hit_at_3": result.hit_at_3,
-                        "hit_at_5": result.hit_at_5,
-                        "mrr": result.mrr,
-                        "failed_expected_ids": "|".join(map(str, result.failed_expected_ids)),
-                    }
-                )
+        for embedding_provider, embedder in embedders.items():
+            for embedding_mode in embedding_modes:
+                index_path, metadata_path = index_bundle_paths(index_dir, chunking_mode, embedding_provider, embedding_mode)
+                for top_k in top_ks:
+                    result = evaluate_index(index_path, metadata_path, questions, embedder, top_k)
+                    rows.append(
+                        {
+                            "chunking_mode": chunking_mode,
+                            "embedding_provider": embedding_provider,
+                            "embedding_mode": embedding_mode,
+                            "top_k": top_k,
+                            "hit_at_1": result.hit_at_1,
+                            "hit_at_3": result.hit_at_3,
+                            "hit_at_5": result.hit_at_5,
+                            "mrr": result.mrr,
+                            "failed_expected_ids": "|".join(map(str, result.failed_expected_ids)),
+                        }
+                    )
     return rows
 
 
@@ -111,24 +118,19 @@ def main() -> None:
     parser.add_argument("--questions", type=Path, required=True)
     parser.add_argument("--index-dir", type=Path, default=Path("index"))
     parser.add_argument("--output", type=Path, default=Path("output/evaluation_summary.csv"))
+    parser.add_argument("--providers", nargs="+", default=["openai", "local"])
     parser.add_argument("--chunking-modes", nargs="+", default=["row", "paragraph", "file"])
     parser.add_argument("--embedding-modes", nargs="+", default=["title", "title_body"])
     parser.add_argument("--top-ks", nargs="+", type=int, default=[3, 5])
     args = parser.parse_args()
 
     load_dotenv()
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY 환경변수가 필요합니다.")
-    embedder = OpenAIEmbedder(
-        OpenAI(api_key=api_key),
-        os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-    )
+    embedders = {provider: build_embedder(provider, os.environ) for provider in args.providers}
     questions = read_questions(args.questions)
     rows = _experiment_rows(
         args.index_dir,
         questions,
-        embedder,
+        embedders,
         tuple(args.chunking_modes),
         tuple(args.embedding_modes),
         tuple(args.top_ks),

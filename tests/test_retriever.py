@@ -9,8 +9,9 @@ from src.retrieval import FaissRetriever
 
 
 class FakeEmbedder:
-    def embed(self, texts: list[str]) -> np.ndarray:
+    def embed(self, texts: list[str], role: str = "passage") -> np.ndarray:
         assert texts == ["환불 가능한가요?"]
+        assert role == "query"
         return np.array([[1.0, 0.0]], dtype=np.float32)
 
 

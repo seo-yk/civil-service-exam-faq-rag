@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from src.indexing import OpenAIEmbedder
+from src.indexing import LocalEmbedder, OpenAIEmbedder
 
 
 class FakeEmbeddings:
@@ -20,7 +20,16 @@ class FakeEmbeddings:
         )
 
 
-def test_embedder_batches_text_and_orders_response_by_index() -> None:
+class FakeSentenceTransformer:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def encode(self, sentences, **kwargs):
+        self.calls.append((list(sentences), kwargs))
+        return np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+
+
+def test_openai_embedder_batches_text_and_orders_response_by_index() -> None:
     embeddings = FakeEmbeddings()
     client = SimpleNamespace(embeddings=embeddings)
     embedder = OpenAIEmbedder(client=client, model="text-embedding-3-small")
@@ -35,8 +44,31 @@ def test_embedder_batches_text_and_orders_response_by_index() -> None:
     }
 
 
-def test_embedder_rejects_empty_input() -> None:
+def test_openai_embedder_rejects_empty_input() -> None:
     embedder = OpenAIEmbedder(client=SimpleNamespace(), model="model")
+
+    with pytest.raises(ValueError, match="비어"):
+        embedder.embed([])
+
+
+def test_local_embedder_prefixes_inputs_by_role() -> None:
+    model = FakeSentenceTransformer()
+    embedder = LocalEmbedder(model_name="fake-model", model=model)
+
+    vectors = embedder.embed(["질문입니다"], role="query")
+
+    assert vectors.shape == (2, 2)
+    sentences, kwargs = model.calls[0]
+    assert sentences == ["query: 질문입니다"]
+    assert kwargs == {
+        "convert_to_numpy": True,
+        "normalize_embeddings": False,
+        "show_progress_bar": False,
+    }
+
+
+def test_local_embedder_rejects_empty_input() -> None:
+    embedder = LocalEmbedder(model_name="fake-model", model=FakeSentenceTransformer())
 
     with pytest.raises(ValueError, match="비어"):
         embedder.embed([])
