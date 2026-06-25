@@ -3,9 +3,14 @@
 import argparse
 import csv
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import load_project_env
 

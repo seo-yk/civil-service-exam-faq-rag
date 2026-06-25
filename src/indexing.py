@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, Protocol, Sequence
@@ -12,6 +13,10 @@ import faiss
 import numpy as np
 import pandas as pd
 from openai import OpenAI
+
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import load_project_env
 
