@@ -10,7 +10,7 @@ from typing import Sequence
 
 
 if __package__ is None or __package__ == "":
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.config import load_project_env
 

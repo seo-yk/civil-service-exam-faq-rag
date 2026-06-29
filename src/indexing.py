@@ -1,4 +1,4 @@
-"""FAQ CSV를 검증하고 청킹한 뒤 임베딩하여 FAISS 인덱스로 저장"""
+"""FAISS 인덱스 저장"""
 
 import argparse
 import json
@@ -68,14 +68,12 @@ class Embedder(Protocol):
 
 
 class OpenAIEmbedder:
-    """OpenAI Embeddings API 응답을 FAISS가 사용할 float32 배열로 변환"""
 
     def __init__(self, client: EmbeddingClient, model: str = "text-embedding-3-small") -> None:
         self._client = client
         self.model = model
 
     def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray:
-        """OpenAI 임베딩 API 호출 실행"""
         del role
         if not texts:
             raise ValueError("임베딩할 텍스트 목록이 비어 있습니다.")
@@ -90,14 +88,12 @@ class OpenAIEmbedder:
 
 
 class LocalEmbedder:
-    """로컬 sentence-transformers 모델을 사용해 텍스트 임베딩"""
 
     def __init__(self, model_name: str = LOCAL_EMBEDDING_MODEL, model: LocalEmbeddingModel | None = None) -> None:
         self.model_name = model_name
         self._model = model
 
     def _load_model(self) -> LocalEmbeddingModel:
-        """로컬 임베딩 모델 지연 로드 실행"""
         if self._model is not None:
             return self._model
         try:
@@ -110,7 +106,6 @@ class LocalEmbedder:
         return self._model
 
     def embed(self, texts: Sequence[str], role: EmbeddingRole = "passage") -> np.ndarray:
-        """로컬 임베딩 벡터 생성 실행"""
         if not texts:
             raise ValueError("임베딩할 텍스트 목록이 비어 있습니다.")
 
@@ -127,7 +122,6 @@ class LocalEmbedder:
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
-    """인코딩 후보를 순회하며 FAQ CSV 읽기 실행"""
     last_error: UnicodeDecodeError | None = None
     for encoding in ENCODINGS:
         try:
@@ -138,7 +132,6 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 
 def _split_paragraphs(body: str) -> list[str]:
-    """본문 문단 분리 실행"""
     stripped = body.strip()
     if not stripped:
         return []
@@ -152,7 +145,6 @@ def _split_paragraphs(body: str) -> list[str]:
 
 
 def _chunk_label(row_id: int, chunking_mode: ChunkingMode, paragraph_index: int | None = None) -> str:
-    """청크 식별자 생성"""
     if chunking_mode == "file":
         return "file-0"
     if chunking_mode == "paragraph":
@@ -162,8 +154,6 @@ def _chunk_label(row_id: int, chunking_mode: ChunkingMode, paragraph_index: int 
 
 
 def load_faq_csv(path: str | Path) -> list[FaqDocument]:
-    """CSV 필수 컬럼과 값의 무결성을 검사한 뒤 FAQ 목록 반환"""
-
     frame = _read_csv(Path(path))
     missing = REQUIRED_COLUMNS.difference(frame.columns)
     if missing:

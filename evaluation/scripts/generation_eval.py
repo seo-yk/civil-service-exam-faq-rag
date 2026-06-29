@@ -1,4 +1,4 @@
-"""생성 답변과 OpenRouter/Gemini judge를 이용한 FAQ 답변 품질 평가."""
+"""생성 답변 결과 평가 (LLM judge) 스크립트"""
 
 import argparse
 import csv
@@ -15,7 +15,7 @@ from openai import OpenAI
 
 
 if __package__ is None or __package__ == "":
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from app import Settings, build_services
 from src.config import load_project_env
@@ -82,7 +82,7 @@ Return a JSON object in this exact format (no markdown blocks, no leading/traili
 
 @dataclass(frozen=True, slots=True)
 class GenerationQuestion:
-    """생성 평가용 질문 한 건."""
+    """생성 평가용 질문 한 건"""
 
     question_id: str
     question: str
@@ -95,8 +95,27 @@ class GenerationQuestion:
 
 
 @dataclass(frozen=True, slots=True)
+class GeneratedAnswerRow:
+    """생성 완료된 답변 한 건"""
+
+    question_id: str
+    question: str
+    question_type: str
+    evaluation_intent: str
+    target_answer_no: int
+    target_answer: str
+    supporting_answer_nos: str
+    generation_provider: str
+    generation_model: str
+    retrieved_answer_nos: str
+    retrieved_contexts: str
+    generated_answer: str
+    notes: str
+
+
+@dataclass(frozen=True, slots=True)
 class JudgeScores:
-    """judge 원시 점수와 최종 판정."""
+    """judge 원시 점수와 최종 판정"""
 
     similarity: int
     groundedness: int
@@ -108,7 +127,7 @@ class JudgeScores:
 
 @dataclass(frozen=True, slots=True)
 class GenerationEvaluationSettings:
-    """생성 평가 실행 설정."""
+    """생성 평가 실행 설정"""
 
     app_settings: Settings
     openrouter_api_key: str
@@ -148,7 +167,7 @@ class GenerationEvaluationSettings:
 
 
 class OpenRouterJudge:
-    """OpenRouter 호환 judge 호출기."""
+    """OpenRouter judge(meta-llama/llama-3.3-70b-instruct:free) 호출기"""
 
     def __init__(self, api_key: str, model: str) -> None:
         self._client = OpenAI(
@@ -178,7 +197,7 @@ class OpenRouterJudge:
 
 
 class GeminiJudge:
-    """Gemini 호환 judge 호출기."""
+    """Gemini judge(gemini-3.5-flash) 호출기"""
 
     def __init__(self, api_key: str, model: str) -> None:
         from google import genai
@@ -203,7 +222,7 @@ class GeminiJudge:
 
 
 def read_generation_questions(path: Path) -> list[GenerationQuestion]:
-    """생성 평가 질문셋 로드."""
+    """생성 평가 질문셋 로드"""
     with path.open(encoding="utf-8-sig", newline="") as file:
         rows: list[GenerationQuestion] = []
         for row in csv.DictReader(file):
@@ -222,8 +241,33 @@ def read_generation_questions(path: Path) -> list[GenerationQuestion]:
         return rows
 
 
+def read_generated_answers(path: Path) -> list[GeneratedAnswerRow]:
+    """생성 결과 CSV 로드"""
+    with path.open(encoding="utf-8-sig", newline="") as file:
+        rows: list[GeneratedAnswerRow] = []
+        for row in csv.DictReader(file):
+            rows.append(
+                GeneratedAnswerRow(
+                    question_id=row["question_id"].strip(),
+                    question=row["question"].strip(),
+                    question_type=row["question_type"].strip(),
+                    evaluation_intent=row["evaluation_intent"].strip(),
+                    target_answer_no=int(row["target_answer_no"]),
+                    target_answer=row["target_answer"].strip(),
+                    supporting_answer_nos=row.get("supporting_answer_nos", "").strip(),
+                    generation_provider=row.get("generation_provider", "").strip(),
+                    generation_model=row.get("generation_model", "").strip(),
+                    retrieved_answer_nos=row.get("retrieved_answer_nos", "").strip(),
+                    retrieved_contexts=row.get("retrieved_contexts", "").strip(),
+                    generated_answer=row["generated_answer"].strip(),
+                    notes=row.get("notes", "").strip(),
+                )
+            )
+        return rows
+
+
 def render_contexts(results: Sequence[SearchResult]) -> str:
-    """judge용 검색 컨텍스트 문자열 생성."""
+    """judge용 검색 컨텍스트 문자열 생성"""
     if not results:
         return "No retrieved FAQ context."
     return "\n\n".join(
@@ -237,17 +281,17 @@ def render_contexts(results: Sequence[SearchResult]) -> str:
 
 
 def similarity_to_ox(score: int) -> str:
-    """유사도 점수를 O/X로 변환."""
+    """유사도 점수를 O/X로 변환"""
     return "O" if score >= 4 else "X"
 
 
 def binary_to_ox(score: int) -> str:
-    """이진 점수를 O/X로 변환."""
+    """이진 점수를 O/X로 변환"""
     return "O" if score == 1 else "X"
 
 
 def most_frequent_element(result: Sequence[str]) -> str:
-    """동률 시 X를 우선하는 최빈값 선택."""
+    """동률 시 X를 우선하는 최빈값 선택"""
     count = Counter(result)
     most_common = count.most_common()
     if not most_common:
@@ -258,7 +302,7 @@ def most_frequent_element(result: Sequence[str]) -> str:
 
 
 def parse_judge_json(text: str) -> JudgeScores:
-    """JSON 결과 파싱하여 점수 및 최종 판정 구조화."""
+    """JSON 결과 파싱하여 점수 및 최종 판정 구조화"""
     clean_text = text.strip()
     if clean_text.startswith("```"):
         lines = clean_text.splitlines()
@@ -305,11 +349,15 @@ def parse_judge_json(text: str) -> JudgeScores:
 
 
 def build_row_note(
-    answer: GeneratedAnswer,
+    generated_answer: str,
+    retrieved_answer_nos: str,
+    generation_provider: str,
+    generation_model: str,
+    judge_model: str,
     judge_scores: JudgeScores,
     question_note: str,
 ) -> str:
-    """디버깅용 note 생성."""
+    """디버깅용 note 생성"""
     parts: list[str] = []
     if question_note:
         parts.append(question_note)
@@ -324,14 +372,20 @@ def build_row_note(
             hallucination=judge_scores.hallucination,
         )
     )
-    if answer.sources:
-        source_ids = "|".join(str(source.document.resolved_row_id) for source in answer.sources)
-        parts.append(f"retrieved_answer_nos={source_ids}")
+    if generation_provider:
+        parts.append(f"generation_provider={generation_provider}")
+    if generation_model:
+        parts.append(f"generation_model={generation_model}")
+    parts.append(f"judge_model={judge_model}")
+    if retrieved_answer_nos:
+        parts.append(f"retrieved_answer_nos={retrieved_answer_nos}")
+    if generated_answer:
+        parts.append(f"generated_chars={len(generated_answer)}")
     return " | ".join(parts)
 
 
 def output_fieldnames() -> list[str]:
-    """결과 CSV 헤더 반환."""
+    """결과 CSV 헤더 반환"""
     return [
         "question_id",
         "question",
@@ -340,6 +394,9 @@ def output_fieldnames() -> list[str]:
         "target_answer_no",
         "target_answer",
         "supporting_answer_nos",
+        "generation_provider",
+        "generation_model",
+        "judge_model",
         "generated_answer",
         "retrieved_answer_nos",
         "similarity_score",
@@ -357,7 +414,7 @@ def evaluate_generation(
     output_path: Path,
     settings: GenerationEvaluationSettings,
 ) -> None:
-    """질문셋 기준 생성+judge 평가 실행."""
+    """질문셋 기준 생성 + judge 평가 실행"""
     questions = read_generation_questions(questions_path)
     retriever, generator = build_services(settings.app_settings)
     
@@ -403,13 +460,80 @@ def evaluate_generation(
         writer.writerows(rows)
 
 
+def evaluate_generated_answers(
+    answers_path: Path,
+    output_path: Path,
+    settings: GenerationEvaluationSettings,
+) -> None:
+    """생성 완료된 답변 CSV를 judge로만 평가"""
+    answers = read_generated_answers(answers_path)
+
+    if settings.judge_provider == "gemini":
+        judge = GeminiJudge(settings.gemini_api_key, settings.judge_model)
+    else:
+        judge = OpenRouterJudge(settings.openrouter_api_key, settings.judge_model)
+
+    rows: list[dict[str, Any]] = []
+    for item in answers:
+        raw_judge_text = judge.evaluate(
+            item.question,
+            item.target_answer,
+            item.generated_answer,
+            item.retrieved_contexts or "No retrieved FAQ context.",
+        )
+        judge_scores = parse_judge_json(raw_judge_text)
+
+        rows.append(
+            {
+                "question_id": item.question_id,
+                "question": item.question,
+                "question_type": item.question_type,
+                "evaluation_intent": item.evaluation_intent,
+                "target_answer_no": item.target_answer_no,
+                "target_answer": item.target_answer,
+                "supporting_answer_nos": item.supporting_answer_nos,
+                "generation_provider": item.generation_provider,
+                "generation_model": item.generation_model,
+                "judge_model": settings.judge_model,
+                "generated_answer": item.generated_answer,
+                "retrieved_answer_nos": item.retrieved_answer_nos,
+                "similarity_score": judge_scores.similarity,
+                "groundedness": judge_scores.groundedness,
+                "correctness": judge_scores.correctness,
+                "completeness": judge_scores.completeness,
+                "hallucination": judge_scores.hallucination,
+                "overall": judge_scores.overall,
+                "notes": build_row_note(
+                    generated_answer=item.generated_answer,
+                    retrieved_answer_nos=item.retrieved_answer_nos,
+                    generation_provider=item.generation_provider,
+                    generation_model=item.generation_model,
+                    judge_model=settings.judge_model,
+                    judge_scores=judge_scores,
+                    question_note=item.notes,
+                ),
+            }
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=output_fieldnames())
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> None:
-    """생성 평가 CLI 실행."""
-    parser = argparse.ArgumentParser(description="FAQ 생성 답변을 평가합니다.")
+    """생성 결과 평가 CLI 실행"""
+    parser = argparse.ArgumentParser(description="FAQ 생성 답변 결과를 평가합니다.")
     parser.add_argument(
         "--questions",
         type=Path,
-        default=Path("evaluation/generation_questions.csv"),
+        default=Path("evaluation/inputs/question_generation.csv"),
+    )
+    parser.add_argument(
+        "--answers",
+        type=Path,
+        help="생성 전용 단계에서 저장한 답변 CSV 경로",
     )
     parser.add_argument(
         "--output",
@@ -420,7 +544,10 @@ def main() -> None:
 
     load_project_env()
     settings = GenerationEvaluationSettings.from_mapping(dict(os.environ))
-    evaluate_generation(args.questions, args.output, settings)
+    if args.answers is not None:
+        evaluate_generated_answers(args.answers, args.output, settings)
+    else:
+        evaluate_generation(args.questions, args.output, settings)
 
 
 if __name__ == "__main__":

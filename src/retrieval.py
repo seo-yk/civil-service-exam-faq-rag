@@ -1,4 +1,4 @@
-"""질문 벡터와 FAQ 벡터를 비교해 관련 FAQ 검색."""
+"""질문 벡터와 FAQ 벡터를 비교해 관련 FAQ 검색"""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +46,7 @@ class FaissRetriever:
         self._embedder = embedder
 
     def search(self, question: str, top_k: int = 3) -> list[SearchResult]:
-        """질문 벡터화 후 Top K 검색 실행."""
+        """질문 벡터화 후 Top K 검색 실행"""
         return self.search_with_metrics(question, top_k)[0]
 
     def search_with_metrics(
@@ -54,7 +54,7 @@ class FaissRetriever:
         question: str,
         top_k: int = 3,
     ) -> tuple[list[SearchResult], SearchMetrics]:
-        """질문 임베딩 시간과 FAISS 검색 시간을 분리해 반환."""
+        """질문 임베딩 시간과 FAISS 검색 시간을 분리해 반환"""
         if not question.strip():
             raise ValueError("질문을 입력해야 합니다.")
         if top_k < 1:

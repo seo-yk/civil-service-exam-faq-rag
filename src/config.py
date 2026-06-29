@@ -1,4 +1,4 @@
-"""프로젝트 공통 환경 설정 로딩."""
+"""프로젝트 공통 환경 설정 로딩"""
 
 import os
 
@@ -11,6 +11,4 @@ def load_project_env() -> None:
     if env_file:
         load_dotenv(env_file, override=True)
         return
-    # Default to loading the unified .env file, allowing local overrides via .env.local
     load_dotenv(".env", override=True)
-    load_dotenv(".env.local", override=True)

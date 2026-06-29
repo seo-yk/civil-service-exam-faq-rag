@@ -1,4 +1,4 @@
-"""검색된 FAQ만 근거로 생성 모델 답변 생성"""
+"""검색된 FAQ 근거로 생성 모델 답변 생성"""
 
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
@@ -22,7 +22,7 @@ class GeneratedAnswer:
 
 
 def build_prompt(question: str, sources: Sequence[SearchResult]) -> str:
-    """생성 모델에 전달할 공통 프롬프트 생성."""
+    """생성 모델에 전달할 공통 프롬프트 생성"""
     contexts = "\n\n".join(
         "[FAQ {row_id}]\n제목: {title}\n본문: {body}".format(
             row_id=result.document.resolved_row_id,
@@ -41,14 +41,12 @@ def build_prompt(question: str, sources: Sequence[SearchResult]) -> str:
 
 
 class GeminiAnswerGenerator:
-    """모델에는 FAQ 컨텍스트만 전달하고 출처는 애플리케이션이 보존"""
 
     def __init__(self, client: GeminiClient, model: str) -> None:
         self._client = client
         self.model = model
 
     def generate(self, question: str, search_results: Sequence[SearchResult]) -> GeneratedAnswer:
-        """검색 결과 기반 Gemini 답변 생성"""
         sources = tuple(search_results)
         if not sources:
             return GeneratedAnswer("검색된 FAQ에서 답변 근거를 찾을 수 없습니다.", ())
@@ -60,14 +58,12 @@ class GeminiAnswerGenerator:
 
 
 class OpenRouterAnswerGenerator:
-    """OpenRouter 호환 OpenAI API로 FAQ 기반 답변 생성"""
 
     def __init__(self, client: OpenRouterClient, model: str) -> None:
         self._client = client
         self.model = model
 
     def generate(self, question: str, search_results: Sequence[SearchResult]) -> GeneratedAnswer:
-        """검색 결과 기반 OpenRouter 답변 생성"""
         sources = tuple(search_results)
         if not sources:
             return GeneratedAnswer("검색된 FAQ에서 답변 근거를 찾을 수 없습니다.", ())
